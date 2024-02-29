@@ -13,7 +13,9 @@ public class TesteIntegracao {
         var user = "Gere 5 produtos";
         var system = "Gere produtos ficticios para um ecommerce apenas com os nomes dos produtos solicitatos pelo usuario";
 
-        var service = new OpenAiService("your_token");
+        var chave = System.getenv("OPENAI_KEY");
+        var service = new OpenAiService(chave);
+
         var chatCompletionRequest = ChatCompletionRequest
                                     .builder()
                                     .model("gpt-3.5-turbo")
@@ -23,6 +25,6 @@ public class TesteIntegracao {
                                     ))
                                     .build();
 
-        service.createChatCompletion(chatCompletionRequest).getChoices().forEach(System.out::println);
+        service.createChatCompletion(chatCompletionRequest).getChoices().forEach(c -> System.out.println(c.getMessage().getContent()));
     }
 }
