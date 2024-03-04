@@ -1,5 +1,6 @@
 package io.github.eduardoconceicao90;
 
+import com.theokanning.openai.OpenAiHttpException;
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.completion.chat.ChatMessageRole;
@@ -11,77 +12,109 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 public class AnaliseDeSentimentos {
 
-    public static void main(String[] args) throws IOException {
-        try {
-            var promptSistema = """   
-                                     
-                        Você é um analisador de sentimentos de avaliações de produtos.
-                        Escreva um parágrafo com até 50 palavras resumindo as avaliações e depois atribua qual o sentimento geral para o produto.
-                        Identifique também 3 pontos fortes e 3 pontos fracos identificados a partir das avaliações.
-                                        
-                        #### Formato de saída
-                        
-                        Nome do produto:
-                        Resumo das avaliações: [resuma em até 50 palavras]
-                        Sentimento geral: [deve ser: POSITIVO, NEUTRO ou NEGATIVO]
-                        Pontos fortes: [3 bullets points]
-                        Pontos fracos: [3 bullets points]
-                                    
-                    """;
+    public static void main(String[] args) throws InterruptedException {
+        var arquivosDeAvaliacoes = carregarArquivosDeAvaliacoes();
 
-            var diretorioAvaliacoes = Path.of("src/main/resources/avaliacoes");
-            var arquivosDeAvaliacoes = Files.walk(diretorioAvaliacoes, 1)
-                                            .filter(path -> path.toString().endsWith(".txt"))
-                                            .collect(Collectors.toList());
+        for (var arquivo : arquivosDeAvaliacoes) {
+            System.out.println("Iniciando analise do produto: " +arquivo.getFileName());
 
-            for(Path arquivo: arquivosDeAvaliacoes){
-                System.out.println("Iniciando a análise do produto: " + arquivo.getFileName());
-                var promptUsuario = carregarArquivo(arquivo);
-                var request = ChatCompletionRequest
-                        .builder()
-                        .model("gpt-3.5-turbo-16k")
-                        .messages(Arrays.asList(
-                                new ChatMessage(
-                                        ChatMessageRole.SYSTEM.value(),
-                                        promptSistema),
-                                new ChatMessage(
-                                        ChatMessageRole.USER.value(),
-                                        promptUsuario)))
-                        .build();
+            var resposta = enviarRequisicao(arquivo);
+            salvarArquivoDeAnaliseDeSentimento(arquivo, resposta);
 
-                var chave = System.getenv("OPENAI_KEY");
-                var service = new OpenAiService(chave, Duration.ofSeconds(60));
-
-                var resposta = service
-                        .createChatCompletion(request)
-                        .getChoices().get(0).getMessage().getContent();
-
-                salvarAnalise(arquivo.getFileName().toString().replace(".txt", ""), resposta);
-                System.out.println("Análise finalizada.");
-            }
-        }catch (Exception e){
-            System.out.println("Ocorreu um erro ao realizar as análises de sentimentos!");
-            System.out.println(e.getMessage());
+            System.out.println("Analise finalizada");
         }
     }
 
-    private static String carregarArquivo(Path arquivo) {
+    private static String enviarRequisicao(Path arquivo) throws InterruptedException {
+        var chave = System.getenv("OPENAI_KEY");
+        var service = new OpenAiService(chave, Duration.ofSeconds(60));
+
+        var promptSistema = """
+                                Você é um analisador de sentimentos de avaliações de produtos.
+                                Escreva um parágrafo com até 50 palavras resumindo as avaliações e depois atribua qual o sentimento geral para o produto.
+                                Identifique também 3 pontos fortes e 3 pontos fracos identificados a partir das avaliações.
+
+                                #### Formato de saída
+                                Nome do produto:
+                                Resumo das avaliações: [resuma em até 50 palavras]
+                                Sentimento geral: [deve ser: POSITIVO, NEUTRO ou NEGATIVO]
+                                Pontos fortes: [3 bullets points]
+                                Pontos fracos: [3 bullets points]
+                                
+                            """;
+        var promptUsuario = lerConteudoDoArquivo(arquivo);
+
+        var request = ChatCompletionRequest
+                .builder()
+                .model("gpt-3.5-turbo-16k")
+                .messages(Arrays.asList(
+                        new ChatMessage(
+                                ChatMessageRole.SYSTEM.value(),
+                                promptSistema),
+                        new ChatMessage(
+                                ChatMessageRole.USER.value(),
+                                promptUsuario)))
+                .build();
+
+        var tentativas = 0;
+
+        while (tentativas++ != 3) {
+            try {
+                return service
+                        .createChatCompletion(request)
+                        .getChoices().get(0).getMessage().getContent();
+            } catch (OpenAiHttpException ex) {
+                var errorCode = ex.statusCode;
+                switch (errorCode) {
+                    case 401 -> throw new RuntimeException("Erro com a chave da API!", ex);
+                    case 500, 503 -> {
+                        System.out.println("API fora do ar! Nova tentativa em instantes");
+                        Thread.sleep(1000 * 5);
+                    }
+                }
+            }
+        }
+        throw new RuntimeException("API Fora do ar! Tentativas finalizadas sem sucesso!");
+    }
+
+    private static List<Path> carregarArquivosDeAvaliacoes() {
+        try {
+            var diretorioAvaliacoes = Path.of("src/main/resources/avaliacoes");
+            return Files
+                    .walk(diretorioAvaliacoes, 1)
+                    .filter(path -> path.toString().endsWith(".txt"))
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            System.out.println(e);
+            throw new RuntimeException("Erro ao carregar os arquivos de avaliacoes!", e);
+        }
+    }
+
+    private static String lerConteudoDoArquivo(Path arquivo) {
         try {
             return Files.readAllLines(arquivo).toString();
         } catch (Exception e) {
-            throw new RuntimeException("Erro ao carregar o arquivo!", e);
+            System.out.println(e);
+            throw new RuntimeException("Erro ao ler conteudo do arquivo!", e);
         }
     }
 
-    private static void salvarAnalise(String arquivo, String analise) {
+    private static void salvarArquivoDeAnaliseDeSentimento(Path arquivo, String analise) {
         try {
-            var path = Path.of("src/main/resources/analises/analise-sentimentos-" + arquivo +".txt");
+            var nomeProduto = arquivo
+                    .getFileName()
+                    .toString()
+                    .replace(".txt", "")
+                    .replace("avaliacoes-", "");
+            var path = Path.of("src/main/resources/analises/analise-sentimentos-" +nomeProduto +".txt");
             Files.writeString(path, analise, StandardOpenOption.CREATE_NEW);
         } catch (Exception e) {
+            System.out.println(e);
             throw new RuntimeException("Erro ao salvar o arquivo!", e);
         }
     }
