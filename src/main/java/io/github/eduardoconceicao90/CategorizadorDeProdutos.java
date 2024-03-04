@@ -24,6 +24,7 @@ public class CategorizadorDeProdutos {
         System.out.println("----------RESPOSTA----------");
 
         var system = """
+                        
                         Você é um categorizador de produtos e deve responder apenas o nome da categoria do produto informado";
                         
                         Escolha uma categoria dentre a lista abaixo:
